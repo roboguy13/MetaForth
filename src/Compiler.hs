@@ -28,9 +28,9 @@ compile parsed =
   unlines
     ["EXTERN _setup_stack"
     ,"BITS 64"
-    ,"GLOBAL start"
+    ,"GLOBAL _start"
     ,"SECTION .text\n"
-    ,compileCode ("\n\n\nstart:\n" ++ setupStack) parsed id
+    ,compileCode ("\n\n\n_start:\n" ++ setupStack) parsed id
     ,exitCode
     ]
   where
@@ -39,7 +39,8 @@ compile parsed =
 setupStack :: String
 setupStack =
   unlines
-    ["call _setup_stack"
+    ["and rsp, -16   ; stack alignment"
+    ,"call _setup_stack"
     ,"mov r9, rax"
     ,"sub qword r9, 8"
     ]
