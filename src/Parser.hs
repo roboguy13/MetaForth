@@ -12,7 +12,7 @@ module Parser
   )
   where
 
-import Data.Functor
+import Control.Monad (void)
 
 type WordName = String
 
