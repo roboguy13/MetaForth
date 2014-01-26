@@ -25,7 +25,14 @@ type MangledName   = String
 -- NOTE: compileBuiltins and generateThunks are independent from each other.
 compile :: [ParsedCode] -> String
 compile parsed =
-  "\nEXTERN _setup_stack\nBITS 64\nGLOBAL start\nSECTION .text\n\n" ++ compileCode ("\n\n\nstart:\n" ++ setupStack) parsed id ++ exitCode
+  unlines
+    ["EXTERN _setup_stack"
+    ,"BITS 64"
+    ,"GLOBAL start"
+    ,"SECTION .text\n"
+    ,compileCode ("\n\n\nstart:\n" ++ setupStack) parsed id
+    ,exitCode
+    ]
   where
     exitCode = popInto "rdi" ++ "mov rax, 0x2000001\nsyscall"
 
@@ -125,9 +132,7 @@ compileLabel :: String -> [ParsedCode] -> String
 compileLabel mangledName code =
    compileCode
     (mangledName 
-      ++ unlines
-          [":"
-          ])
+      ++ ":")
     code
     prefix
      ++ "ret\n\n"

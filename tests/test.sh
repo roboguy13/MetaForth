@@ -1,3 +1,3 @@
 #!/bin/sh
-ghc MetaForth && ./MetaForth < $1.4th > $1.asm && nasm -Wall -f macho64 -g $1.asm && gcc -c rts.c && ld -lc ../dist/build/MetaForth/MetaForth-tmp/src/rts.o $1.o
+cabal build && ./dist/build/MetaForth/MetaForth < tests/$1.4th > tests/$1.asm && nasm -Wall -f macho64 -g tests/$1.asm && ld -lc dist/build/MetaForth/MetaForth-tmp/src/rts.o tests/$1.o
 
