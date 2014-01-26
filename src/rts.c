@@ -8,7 +8,7 @@ void die(const char* name) {
 }
 
 void* setup_stack() {
- void* m = mmap(NULL, 512*1024*1024, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+  void* m = mmap(NULL, 512*1024*1024, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
   if (m == MAP_FAILED) {
     die("setup_stack");
   }
