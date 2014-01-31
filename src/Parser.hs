@@ -40,9 +40,6 @@ parse = Just . fst . go . concatMap brackets . words
       in
       (WordDef w block : restCode, rest')
 
---    go (":":_) =
---      Nothing      -- This must be a syntax error in the input
-
     -- Quoting
     go ("[":ws) =
       let (block, rest)     = go ws

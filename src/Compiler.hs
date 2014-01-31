@@ -1,3 +1,5 @@
+{-# LANGUAGE FlexibleInstances, ScopedTypeVariables #-}
+
 module Compiler
   (compile
   )
@@ -22,7 +24,6 @@ type AnnotatedCode = Code String
 type MangledName   = String
 
 
--- NOTE: compileBuiltins and generateThunks are independent from each other.
 compile :: [ParsedCode] -> String
 compile parsed =
   unlines
@@ -45,9 +46,10 @@ setupStack =
     ,"sub qword r9, 8"
     ]
 
-compileCode :: String -> [ParsedCode] -> (String -> String) -> String
+-- NOTE: compileBuiltins and generateThunks are independent from each other.
+compileCode :: Annotate a => String -> [Code a] -> (String -> String) -> String
 compileCode label parsed transform =
-  let annotated'    = annotateCode parsed
+  let annotated'    = annotateCode         parsed
       annotated     = map (fmap transform) annotated'
       (names, defs) = generateWordDefs     annotated
       thunks        = generateThunks       annotated
@@ -55,54 +57,61 @@ compileCode label parsed transform =
   thunks ++ defs ++ label ++ compileCalls names annotated
 
 
+
+-- TODO: Find a cleaner way. The type class ensures we only mangle things once.
+
 -- | Annotate the code with mangled thunk names and mangle user defined words
-annotateCode :: [ParsedCode] -> [AnnotatedCode]
-annotateCode =
-  flip evalState (M.empty, 0) . mapM go
-  where
-    first :: (a -> a') -> (a, b) -> (a', b)
-    first  f (x, y) = (f x, y)
+class Annotate a where
+  annotateCode :: [Code a] -> [AnnotatedCode]
 
-    second :: (b -> b') -> (a, b) -> (a, b')
-    second          = fmap
+instance Annotate () where
+  annotateCode =
+    flip evalState (M.empty, 0) . mapM annotate
+    where
+      first :: (a -> a') -> (a, b) -> (a', b)
+      first  f (x, y) = (f x, y)
+
+      second :: (b -> b') -> (a, b) -> (a, b')
+      second          = fmap
+
+      mangleIt ::
+            String 
+            -> (String -> State (Map String MangledName, Int) AnnotatedCode) 
+            -> State (Map String MangledName, Int) AnnotatedCode
+      mangleIt wordName fn = do
+        (mangledWords, _) <- get
+        case M.lookup wordName mangledWords of
+          Nothing ->
+            case lookup wordName builtins of
+              Nothing -> do
+                let mangled = mangleWordName wordName
+                modify (first $ M.insert wordName mangled)
+                fn mangled
+
+              Just _ ->
+                fn wordName
+
+          Just mangled ->
+            fn mangled
+
+      annotate (Word wordName) =
+        mangleIt wordName (return . Word)
+
+      annotate (WordDef wordName code) =
+        mangleIt wordName
+                 (\mangled ->
+                    WordDef mangled <$> mapM annotate code)
 
 
-    mangleIt ::
-          String 
-          -> (String -> State (Map String MangledName, Int) AnnotatedCode) 
-          -> State (Map String MangledName, Int) AnnotatedCode
-    mangleIt wordName fn = do
-      (mangledWords, _) <- get
-      case M.lookup wordName mangledWords of
-        Nothing ->
-          case lookup wordName builtins of
-            Nothing -> do
-              let mangled = mangleWordName wordName
-              modify (first $ M.insert wordName mangled)
-              fn mangled
+      annotate (Quoted () code) = do
+        modify (second (+1))
+        (_, n) <- get
+        let mangled = mangleThunk n
+        Quoted mangled <$> mapM annotate code
 
-            Just _ ->
-              fn wordName
+instance Annotate [Char] where
+  annotateCode = id
 
-        Just mangled ->
-          fn mangled
-
-
-    go :: ParsedCode -> State (Map String MangledName, Int) AnnotatedCode
-    go (Word wordName) =
-      mangleIt wordName (return . Word)
-
-    go (WordDef wordName code) =
-      mangleIt wordName
-               (\mangled ->
-                  WordDef mangled <$> mapM go code)
-
-
-    go (Quoted () code) = do
-      modify (second (+1))
-      (_, n) <- get
-      let mangled = mangleThunk n
-      return $! Quoted mangled (annotateCode code)
 
 
 
@@ -120,8 +129,8 @@ mangleWordName wordName
       Nothing -> wordMangling ++ wordName
       Just _  -> wordName
 
-unmangleWordName :: MangledName -> String
-unmangleWordName = drop (length wordMangling)
+--unmangleWordName :: MangledName -> String
+--unmangleWordName = drop (length wordMangling)
 
 -- TODO: Finish
 isLiteral :: String -> Bool
@@ -129,11 +138,10 @@ isLiteral = all isNumber
 
 -- | Thunk and word definition compilation stage
 -- Clobbers rdx
-compileLabel :: String -> [ParsedCode] -> String
+compileLabel :: Annotate a => String -> [Code a] -> String
 compileLabel mangledName code =
    compileCode
-    (mangledName 
-      ++ ":")
+    (mangledName ++ ":")
     code
     prefix
      ++ "ret\n\n"
@@ -141,16 +149,15 @@ compileLabel mangledName code =
     prefix = (++ mangledName)
  
 
-generateLabels :: (AnnotatedCode -> Maybe (WordName, [AnnotatedCode])) -> [AnnotatedCode] -> ([String], String)
+generateLabels :: Annotate a => (Code a -> Maybe (WordName, [Code a])) -> [Code a] -> ([String], String)
 generateLabels fn =
   mconcat . map go
   where
-    go :: AnnotatedCode -> ([String], String)
     go x =
       case fn x of
         Nothing           -> ([], "")
         Just (name, code) ->
-          ([name], compileLabel name (map deannotate code))
+          ([name], compileLabel name code)
 
 
 generateThunks :: [AnnotatedCode] -> String
@@ -159,9 +166,10 @@ generateThunks = snd . generateLabels thunk
     thunk (Quoted name code) = Just (name, code)
     thunk _                  = Nothing
 
-generateWordDefs :: [AnnotatedCode] -> ([String], String)
+generateWordDefs :: forall a. Annotate a => [Code a] -> ([String], String)
 generateWordDefs = generateLabels wordDef
   where
+    wordDef :: Code a -> Maybe (WordName, [Code a])
     wordDef (WordDef name code) = Just (name, code)
     wordDef _                   = Nothing
 
@@ -195,25 +203,24 @@ builtins =
   [("drop", pop)
   ,("dup",  popInto "rax" ++ push "rax" ++ push "rax")
   ,("swap", popInto "rax" ++ popInto "rbx" ++ push "rax" ++ push "rbx")
+  ,("rot",  popInto "rax" ++ popInto "rbx" ++ popInto "rcx" ++ push "rbx" ++ push "rax" ++ push "rcx")
   ,("+",    popInto "rax" ++ popInto "rbx" ++ "add rax, rbx\n" ++ push "rax")
   ,("-",    popInto "rax" ++ popInto "rbx" ++ "sub rbx, rax\n" ++ push "rbx")
   ,("*",    popInto "rax" ++ popInto "rbx" ++ "mul rbx\n"      ++ push "rax")
   ,("/",    popInto "rax" ++ popInto "rbx" ++ "div rax, rbx\n" ++ push "rax")
-  ,("call", popInto "rax" ++ "\ncall rax\n") -- TODO: Finish testing
+  ,("call", popInto "rax" ++ "\ncall rax\n")
   ]
 
 -- | Finish compiling thunks (i.e. pop the addresses in the appropriate place)
 --   and compile calls to builtin words
+-- TODO: Check for undefined words
 --   *** Might clobber rcx
 compileCalls :: [WordName] -> [AnnotatedCode] -> String
-compileCalls userDefinedWords =
+compileCalls _ =
   concatMap go
   where
     userDefined wordName
-      | wordName `elem` userDefinedWords =
-        "call " ++ wordName ++ "\n"
-      | otherwise =
-        error $ "Undefined word " ++ show (unmangleWordName wordName)
+        = "call " ++ wordName ++ "\n"
 
     go (Word wordName)
       | all isNumber wordName = compileIntLiteral wordName
